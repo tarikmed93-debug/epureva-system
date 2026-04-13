@@ -45,44 +45,51 @@ MARRAKECH_BBOX = "31.5600,−8.0800,31.6800,−7.9400"
 MARRAKECH_AREA = "31.560,-8.080,31.680,-7.940"
 
 
+OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
+
 def chercher_overpass(filtre, max_resultats=50):
     """Cherche des établissements via Overpass API (OpenStreetMap)"""
     resultats = []
-    try:
-        query = f"""
-        [out:json][timeout:25];
-        (
-          node[{filtre}]({MARRAKECH_AREA});
-          way[{filtre}]({MARRAKECH_AREA});
-        );
-        out body;
-        """
-        resp = requests.post(
-            "https://overpass-api.de/api/interpreter",
-            data=query,
-            timeout=30
-        )
-        data = resp.json()
+    query = "[out:json][timeout:25];node[" + filtre + "](" + MARRAKECH_AREA + ");out body;"
 
-        for elem in data.get('elements', [])[:max_resultats]:
-            tags = elem.get('tags', {})
-            nom = tags.get('name', '')
-            site = tags.get('website', tags.get('contact:website', ''))
-            email = tags.get('email', tags.get('contact:email', ''))
+    data = None
+    for endpoint in OVERPASS_ENDPOINTS:
+        for tentative in range(3):
+            try:
+                resp = requests.get(endpoint, params={"data": query}, timeout=30)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    break
+                time.sleep(5)
+            except Exception:
+                time.sleep(5)
+        if data:
+            break
 
-            if not nom:
-                continue
+    if not data:
+        print(f"  Erreur Overpass: tous les endpoints ont échoué")
+        return resultats
 
-            resultats.append({
-                'nom': nom,
-                'site': site,
-                'email': email,
-                'adresse': tags.get('addr:street', ''),
-                'telephone': tags.get('phone', tags.get('contact:phone', '')),
-            })
+    for elem in data.get('elements', [])[:max_resultats]:
+        tags = elem.get('tags', {})
+        nom = tags.get('name', '')
+        site = tags.get('website', tags.get('contact:website', ''))
+        email = tags.get('email', tags.get('contact:email', ''))
 
-    except Exception as e:
-        print(f"  Erreur Overpass: {e}")
+        if not nom:
+            continue
+
+        resultats.append({
+            'nom': nom,
+            'site': site,
+            'email': email,
+            'adresse': tags.get('addr:street', ''),
+            'telephone': tags.get('phone', tags.get('contact:phone', '')),
+        })
 
     return resultats
 
