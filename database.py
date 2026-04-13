@@ -16,6 +16,7 @@ if USE_POSTGRES:
 def get_db():
     if USE_POSTGRES:
         conn = psycopg2.connect(DATABASE_URL)
+        conn.cursor_factory = psycopg2.extras.RealDictCursor
         return conn
     else:
         import sqlite3
