@@ -1,9 +1,12 @@
+"""
+Scraper Epureva — Overpass API (OpenStreetMap) + extraction emails
+Trouve les restaurants/établissements à Marrakech et extrait leurs emails
+"""
 import requests
 from bs4 import BeautifulSoup
 import re
 import time
 import random
-import os
 from database import ajouter_prospect
 
 HEADERS = {
@@ -11,59 +14,90 @@ HEADERS = {
     'Accept-Language': 'fr-FR,fr;q=0.9',
 }
 
-REQUETES = {
+EXCLUSIONS_EMAILS = [
+    'example', 'test', 'sentry', 'noreply', 'wordpress',
+    '.png', '.jpg', '.css', 'schema.org', 'wixpress', 'youremail'
+]
+
+# Requêtes Overpass pour chaque secteur
+OVERPASS_QUERIES = {
     'restaurant': [
-        'cafe restaurant Marrakech contact',
-        'brasserie Marrakech contact mail',
-        'restaurant traditionnel Marrakech email',
-        'riad restaurant Marrakech email contact',
-        'restaurant italien Marrakech email',
-        'restaurant libanais Marrakech contact',
-        'restaurant medina Marrakech email',
-        'restaurant guéliz Marrakech contact email',
-        'traiteur Marrakech email contact',
-        'restaurant marocain Marrakech email',
+        'amenity=restaurant',
+        'amenity=cafe',
+        'amenity=fast_food',
+        'amenity=bar',
     ],
     'hotel': [
-        'riad Marrakech email contact',
-        'hotel Marrakech contact email',
-        'maison hotes Marrakech email',
+        'tourism=hotel',
+        'tourism=hostel',
+        'tourism=guest_house',
     ],
     'bureau': [
-        'agence immobiliere Marrakech email',
-        'cabinet comptable Marrakech contact',
-        'clinique dentaire Marrakech email',
+        'office=yes',
+        'amenity=dentist',
+        'amenity=pharmacy',
     ],
-    'chantier': [
-        'promoteur immobilier Marrakech email',
-        'architecte Marrakech contact email',
-        'BTP construction Marrakech email',
-    ]
 }
 
-EXCLUSIONS_SITES = [
-    'facebook','instagram','tripadvisor','booking','google',
-    'youtube','twitter','linkedin','pagesjaunes','yelp',
-    'wikipedia','maps','trustpilot','foursquare'
-]
+# Zone Marrakech (bounding box)
+MARRAKECH_BBOX = "31.5600,−8.0800,31.6800,−7.9400"
+# Format correct Overpass : sud,ouest,nord,est
+MARRAKECH_AREA = "31.560,-8.080,31.680,-7.940"
 
-EXCLUSIONS_EMAILS = [
-    'example','test','sentry','noreply','wordpress',
-    '.png','.jpg','.css','schema.org','wixpress','youremail'
-]
+
+def chercher_overpass(filtre, max_resultats=50):
+    """Cherche des établissements via Overpass API (OpenStreetMap)"""
+    resultats = []
+    try:
+        query = f"""
+        [out:json][timeout:25];
+        (
+          node[{filtre}]({MARRAKECH_AREA});
+          way[{filtre}]({MARRAKECH_AREA});
+        );
+        out body;
+        """
+        resp = requests.post(
+            "https://overpass-api.de/api/interpreter",
+            data=query,
+            timeout=30
+        )
+        data = resp.json()
+
+        for elem in data.get('elements', [])[:max_resultats]:
+            tags = elem.get('tags', {})
+            nom = tags.get('name', '')
+            site = tags.get('website', tags.get('contact:website', ''))
+            email = tags.get('email', tags.get('contact:email', ''))
+
+            if not nom:
+                continue
+
+            resultats.append({
+                'nom': nom,
+                'site': site,
+                'email': email,
+                'adresse': tags.get('addr:street', ''),
+                'telephone': tags.get('phone', tags.get('contact:phone', '')),
+            })
+
+    except Exception as e:
+        print(f"  Erreur Overpass: {e}")
+
+    return resultats
+
 
 def extraire_emails_site(url):
+    """Extrait les emails depuis un site web"""
     emails = []
     try:
         resp = requests.get(url, headers=HEADERS, timeout=8)
         soup = BeautifulSoup(resp.text, 'html.parser')
 
-        # Cherche emails dans le texte
         texte = soup.get_text()
         pattern = r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'
         trouves = re.findall(pattern, texte)
 
-        # Cherche dans les liens mailto
         for lien in soup.find_all('a', href=True):
             if 'mailto:' in lien['href']:
                 email = lien['href'].replace('mailto:', '').split('?')[0].strip()
@@ -80,96 +114,64 @@ def extraire_emails_site(url):
         pass
     return emails
 
-def chercher_duckduckgo(query, max_resultats=10):
-    resultats = []
-    try:
-        url = "https://html.duckduckgo.com/html/"
-        params = {'q': query, 'kl': 'fr-fr'}
-        resp = requests.post(url, data=params, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-
-        for r in soup.find_all('div', class_='result__body')[:max_resultats]:
-            a = r.find('a', class_='result__a')
-            if a:
-                resultats.append({
-                    'titre': a.get_text(strip=True),
-                    'url': a.get('href', '')
-                })
-    except Exception as e:
-        print(f"  Erreur DuckDuckGo: {e}")
-    return resultats
-
-def chercher_bing(query, max_resultats=10):
-    """Bing comme backup si DuckDuckGo bloque"""
-    resultats = []
-    try:
-        url = f"https://www.bing.com/search?q={requests.utils.quote(query)}&setlang=fr"
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-
-        for r in soup.find_all('li', class_='b_algo')[:max_resultats]:
-            a = r.find('a')
-            if a and a.get('href', '').startswith('http'):
-                resultats.append({
-                    'titre': a.get_text(strip=True),
-                    'url': a['href']
-                })
-    except Exception as e:
-        print(f"  Erreur Bing: {e}")
-    return resultats
 
 def scraper_secteur(secteur='restaurant'):
     total = 0
-    requetes = REQUETES.get(secteur, REQUETES['restaurant'])
+    filtres = OVERPASS_QUERIES.get(secteur, OVERPASS_QUERIES['restaurant'])
 
-    for query in requetes:
-        print(f"\n  Recherche: {query}")
+    for filtre in filtres:
+        print(f"\n  Overpass: {filtre} à Marrakech...")
+        etablissements = chercher_overpass(filtre, max_resultats=100)
+        print(f"  {len(etablissements)} établissements trouvés")
 
-        # Essaie DuckDuckGo d'abord
-        resultats = chercher_duckduckgo(query, max_resultats=10)
+        for etab in etablissements:
+            nom = etab['nom']
+            email_direct = etab['email']
+            site = etab['site']
 
-        # Si pas de resultats, essaie Bing
-        if not resultats:
-            print("  DuckDuckGo vide, essai Bing...")
-            resultats = chercher_bing(query, max_resultats=10)
-
-        print(f"  {len(resultats)} sites trouves")
-
-        for r in resultats:
-            url = r['url']
-            nom = r['titre']
-
-            if any(x in url.lower() for x in EXCLUSIONS_SITES):
+            # Email direct depuis OSM
+            if email_direct and '@' in email_direct:
+                if not any(x in email_direct.lower() for x in EXCLUSIONS_EMAILS):
+                    if ajouter_prospect(
+                        email=email_direct.lower(),
+                        etablissement=nom,
+                        secteur=secteur,
+                        site_web=site,
+                        telephone=etab['telephone'],
+                        adresse=etab['adresse'],
+                    ):
+                        print(f"    OSM email: {email_direct} ({nom[:30]})")
+                        total += 1
                 continue
-            if not url.startswith('http'):
-                continue
 
-            print(f"    Scanning: {nom[:45]}")
-            emails = extraire_emails_site(url)
+            # Sinon scraper le site web
+            if site and site.startswith('http'):
+                print(f"    Scanning site: {nom[:40]}")
+                emails = extraire_emails_site(site)
+                for email in emails:
+                    if ajouter_prospect(
+                        email=email,
+                        etablissement=nom,
+                        secteur=secteur,
+                        site_web=site,
+                        telephone=etab['telephone'],
+                        adresse=etab['adresse'],
+                    ):
+                        print(f"    Web email: {email} ({nom[:30]})")
+                        total += 1
+                time.sleep(random.uniform(1.0, 2.0))
 
-            for email in emails:
-                if ajouter_prospect(
-                    email=email,
-                    etablissement=nom,
-                    secteur=secteur,
-                    site_web=url,
-                ):
-                    print(f"    Nouveau: {email} ({nom[:30]})")
-                    total += 1
-
-            time.sleep(random.uniform(1.5, 3.0))
-
-        time.sleep(random.uniform(3.0, 5.0))
+        time.sleep(random.uniform(2.0, 4.0))
 
     print(f"\nTotal nouveaux prospects: {total}")
     return total
 
+
 def nettoyer_base():
-    """Supprime les emails invalides et doublons par établissement"""
+    """Supprime les emails invalides et doublons"""
     from database import get_db
     conn = get_db()
 
-    # Supprime emails malformés
     rows = conn.execute("SELECT id, email FROM prospects").fetchall()
     invalides = []
     pattern = re.compile(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$')
@@ -180,7 +182,6 @@ def nettoyer_base():
         conn.execute(f"DELETE FROM prospects WHERE id IN ({','.join(map(str, invalides))})")
         print(f"  {len(invalides)} emails malformés supprimés")
 
-    # Supprime doublons par établissement (garde le plus pro)
     rows = conn.execute("SELECT id, etablissement, email FROM prospects ORDER BY id").fetchall()
     seen = {}
     doublons = []
@@ -202,12 +203,14 @@ def nettoyer_base():
     conn.commit()
     conn.close()
 
+
 def lancer_scraping_journalier(secteur='restaurant'):
-    print(f"\nScraping {secteur}...")
+    print(f"\nScraping {secteur} via Overpass API...")
     total = scraper_secteur(secteur)
     print("\nNettoyage automatique de la base...")
     nettoyer_base()
     return total
+
 
 if __name__ == '__main__':
     from database import init_db
