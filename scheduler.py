@@ -73,7 +73,7 @@ def demarrer_scheduler():
     print("⏰ Scheduler Epureva démarré")
     print("   Job quotidien programmé à 08:00 chaque matin")
     
-    schedule.every(1).minutes.do(job_quotidien)
+    schedule.every().day.at("08:00").do(job_quotidien)
     
     # Lancer immédiatement au démarrage pour tester
     print("\n▶️  Premier lancement immédiat...")
