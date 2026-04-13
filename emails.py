@@ -75,16 +75,17 @@ def envoyer_mail(destinataire, etablissement, numero_mail):
         msg['From'] = f"Tarik Epureva <{SMTP_USER}>"
         msg['To'] = destinataire
         msg['Reply-To'] = SMTP_USER
-        
+        msg['Bcc'] = SMTP_USER
+
         # Version texte simple (fallback)
         texte = f"Bonjour,\n\nJe m'appelle Tarik, je dirige Epureva — nettoyage professionnel à Marrakech.\n\nContactez-moi sur contact@epureva.ma ou +212 664-584106\n\nepureva.ma"
-        
+
         msg.attach(MIMEText(texte, 'plain', 'utf-8'))
         msg.attach(MIMEText(html, 'html', 'utf-8'))
-        
+
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
             server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SMTP_USER, destinataire, msg.as_string())
+            server.sendmail(SMTP_USER, [destinataire, SMTP_USER], msg.as_string())
         
         print(f"  ✓ Mail {numero_mail} envoyé → {destinataire}")
         return True
