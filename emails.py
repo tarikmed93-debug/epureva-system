@@ -2,6 +2,7 @@
 Module d'envoi des emails via SMTP Hostinger
 """
 import smtplib
+import imaplib
 import os
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -83,10 +84,21 @@ def envoyer_mail(destinataire, etablissement, numero_mail):
         msg.attach(MIMEText(texte, 'plain', 'utf-8'))
         msg.attach(MIMEText(html, 'html', 'utf-8'))
 
+        raw = msg.as_bytes()
+
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
             server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SMTP_USER, [destinataire, SMTP_USER], msg.as_string())
-        
+            server.sendmail(SMTP_USER, [destinataire, SMTP_USER], raw)
+
+        # Sauvegarde dans le dossier Envoyés via IMAP
+        try:
+            imap_host = SMTP_HOST.replace('smtp.', 'imap.')
+            with imaplib.IMAP4_SSL(imap_host, 993) as imap:
+                imap.login(SMTP_USER, SMTP_PASS)
+                imap.append('INBOX.Sent', '\\Seen', None, raw)
+        except Exception:
+            pass
+
         print(f"  ✓ Mail {numero_mail} envoyé → {destinataire}")
         return True
         
